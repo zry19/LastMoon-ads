@@ -1,6 +1,6 @@
 require('dotenv').config();
 const fs = require('fs');
-const { Client, GatewayIntentBits, Collection } = require('discord.js');
+const { Client, GatewayIntentBits, Collection, EmbedBuilder } = require('discord.js');
 const cron = require('node-cron');
 const { createAutoMessageEmbed, createLogEmbed, createHelpEmbed } = require('./embed/embed');
 const channelModule = require('./channel');
@@ -59,7 +59,9 @@ for (const file of commandFiles) {
 // utils
 function randomFromArray(arr) { return arr[Math.floor(Math.random()*arr.length)]; }
 
+// ========================
 // Send scheduled message
+// ========================
 async function sendScheduledMessage(timeOfDay) {
   const cd = channelModule.channelData;
   if (!cd.botActive) return;
@@ -78,17 +80,69 @@ async function sendScheduledMessage(timeOfDay) {
       image: Array.isArray(image) && image.length ? randomFromArray(image) : null
     });
     await channel.send({ content: '@everyone', embeds: [embed] });
+    return { success: true };
   } catch (err) {
     console.error(`Error sending ${timeOfDay} message:`, err);
+    return { success: false, error: err.message };
   }
 }
 
-// Cron (server timezone assumed WIB or adjust cron)
-cron.schedule('0 7 * * *', () => sendScheduledMessage('pagi'));
-cron.schedule('0 13 * * *', () => sendScheduledMessage('siang'));
-cron.schedule('0 19 * * *', () => sendScheduledMessage('malam'));
+// ========================
+// Cron log function
+// ========================
+async function sendCronLog(timeOfDay, status, errorMessage = null) {
+  const cd = channelModule.channelData;
+  if (!cd.logChannelId) return;
 
-// Ready
+  try {
+    const logChannel = await client.channels.fetch(cd.logChannelId);
+
+    const embed = new EmbedBuilder()
+      .setTitle(`Cron Triggered: ${timeOfDay}`)
+      .setDescription(
+        status === 'success' 
+          ? `Pesan otomatis untuk **${timeOfDay}** telah dijalankan.` 
+          : `❌ Pesan otomatis untuk **${timeOfDay}** gagal dijalankan.`
+      )
+      .addFields(
+        { name: "Status", value: status === 'success' ? "🟢 Cron executed" : "❌ Cron failed", inline: true },
+        { name: "Waktu (UTC)", value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true },
+        ...(errorMessage ? [{ name: "Error", value: `\`\`\`${errorMessage}\`\`\`` }] : [])
+      )
+      .setColor(status === 'success' ? "#7F00FF" : "#FF0000")
+      .setTimestamp();
+
+    await logChannel.send({ embeds: [embed] });
+  } catch (err) {
+    console.error("Cron log error:", err);
+  }
+}
+
+// ========================
+// CRON SCHEDULE (WIB → UTC)
+// ========================
+
+// Pagi 07:15 WIB → 00:15 UTC
+cron.schedule('15 0 * * *', async () => {
+  const result = await sendScheduledMessage('pagi');
+  await sendCronLog('pagi', result.success ? 'success' : 'fail', result.error || null);
+});
+
+// Siang 13:25 WIB → 06:25 UTC
+cron.schedule('25 6 * * *', async () => {
+  const result = await sendScheduledMessage('siang');
+  await sendCronLog('siang', result.success ? 'success' : 'fail', result.error || null);
+});
+
+// Malam 19:30 WIB → 12:30 UTC
+cron.schedule('30 12 * * *', async () => {
+  const result = await sendScheduledMessage('malam');
+  await sendCronLog('malam', result.success ? 'success' : 'fail', result.error || null);
+});
+
+// ========================
+// READY
+// ========================
 client.once('ready', async () => {
   console.log(`Bot login sebagai ${client.user.tag}`);
   channelModule.loadChannelData();
@@ -104,7 +158,9 @@ client.once('ready', async () => {
   }
 });
 
+// ========================
 // Interaction handler
+// ========================
 client.on('interactionCreate', async (interaction) => {
   if (interaction.isChatInputCommand()) {
     const command = client.commands.get(interaction.commandName);
@@ -131,7 +187,6 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
-// Modal handling
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isModalSubmit()) return;
   const { customId } = interaction;
@@ -186,7 +241,9 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
+// ========================
 // Graceful shutdown
+// ========================
 async function sendOfflineEmbedAndExit() {
   const cd = channelModule.channelData;
   if (cd.logChannelId) {
